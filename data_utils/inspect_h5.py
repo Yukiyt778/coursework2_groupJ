@@ -22,3 +22,4 @@ with h5py.File(h5_file, 'r') as f:
             print(f"Sample data (second row): {data[1]}")
         else:
             print(f"Sample data (first item): {data[0][0]}") 
+

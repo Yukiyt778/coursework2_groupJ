@@ -48,3 +48,31 @@
 2025-04-15 23:23:58,463 - Model - INFO - Pred\True | No Table | Table
 2025-04-15 23:23:58,463 - Model - INFO - No Table  |        9 |     0
 2025-04-15 23:23:58,463 - Model - INFO - Table     |       24 |     0
+2025-04-15 23:37:22,059 - Model - INFO - Using device: cpu
+2025-04-15 23:37:22,060 - Model - INFO - PARAMETER ...
+2025-04-15 23:37:22,060 - Model - INFO - Namespace(use_cpu=False, gpu='0', batch_size=24, num_point=1024, log_dir='pipelineA', model='coursework2_groupJ.models.pointnet2.pointnet2_cls_ssg', test_file='./coursework2_groupJ/data/sun3d_test.h5', ucl_file='./coursework2_groupJ/data/ucl_data.h5')
+2025-04-15 23:37:22,060 - Model - INFO - Load dataset ...
+2025-04-15 23:37:22,065 - Model - INFO - Load UCL dataset ...
+2025-04-15 23:37:22,241 - Model - INFO - Model loaded from ./coursework2_groupJ/weights/pipelineA/checkpoints/best_model.pth to cpu
+2025-04-15 23:37:22,241 - Model - INFO - F1 score reported during training: 1.0000
+2025-04-15 23:37:22,241 - Model - INFO - Model from epoch: 23
+2025-04-15 23:37:22,241 - Model - INFO - 
+==== TESTING ON STANDARD TEST SET ====
+2025-04-15 23:37:22,241 - Model - INFO - Testing on sun3d_test...
+2025-04-15 23:37:51,202 - Model - INFO - Test Instance Accuracy on sun3d_test: 0.6771
+2025-04-15 23:37:51,204 - Model - INFO - Table Accuracy on sun3d_test: 0.6000 (70 samples)
+2025-04-15 23:37:51,204 - Model - INFO - Non-Table Accuracy on sun3d_test: 0.2500 (4 samples)
+2025-04-15 23:37:51,204 - Model - INFO - Confusion Matrix:
+2025-04-15 23:37:51,204 - Model - INFO - Pred\True | No Table | Table
+2025-04-15 23:37:51,205 - Model - INFO - No Table  |        1 |    28
+2025-04-15 23:37:51,205 - Model - INFO - Table     |        3 |    42
+2025-04-15 23:37:51,205 - Model - INFO - 
+==== TESTING ON UCL DATASET ====
+2025-04-15 23:37:51,206 - Model - INFO - Testing on ucl_data...
+2025-04-15 23:38:06,832 - Model - INFO - Test Instance Accuracy on ucl_data: 0.6319
+2025-04-15 23:38:06,832 - Model - INFO - Table Accuracy on ucl_data: 0.6667 (33 samples)
+2025-04-15 23:38:06,832 - Model - INFO - Non-Table Accuracy on ucl_data: nan (0 samples)
+2025-04-15 23:38:06,832 - Model - INFO - Confusion Matrix:
+2025-04-15 23:38:06,832 - Model - INFO - Pred\True | No Table | Table
+2025-04-15 23:38:06,833 - Model - INFO - No Table  |        0 |    11
+2025-04-15 23:38:06,833 - Model - INFO - Table     |        0 |    22
