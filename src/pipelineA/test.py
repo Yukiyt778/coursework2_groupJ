@@ -11,9 +11,9 @@ import importlib
 import argparse
 from tqdm import tqdm
 
-# Add necessary paths
+# Add necessary paths - FIX ROOT_DIR
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(BASE_DIR)
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(BASE_DIR)))  # Up 3 directories to /UCL/Object Detection and Classification
 sys.path.append(ROOT_DIR)
 sys.path.append(os.path.join(ROOT_DIR, 'models'))
 
@@ -26,10 +26,10 @@ def parse_args():
     parser.add_argument('--gpu', type=str, default='0', help='specify gpu device')
     parser.add_argument('--batch_size', type=int, default=24, help='batch size for testing')
     parser.add_argument('--num_point', type=int, default=1024, help='point number')
-    parser.add_argument('--log_dir', type=str, required=True, help='experiment root')
-    parser.add_argument('--model', default='pointnet2_cls_ssg', help='model name')
-    parser.add_argument('--test_file', type=str, default='../dataset/sun3d_test.h5', help='path to test file')
-    parser.add_argument('--ucl_file', type=str, default='../dataset/ucl_data.h5', help='path to UCL data file')
+    parser.add_argument('--log_dir', type=str, default='pipelineA', help='experiment root')
+    parser.add_argument('--model', default='coursework2_groupJ.models.pointnet2.pointnet2_cls_ssg', help='model name')
+    parser.add_argument('--test_file', type=str, default='./coursework2_groupJ/data/sun3d_test.h5', help='path to test file')
+    parser.add_argument('--ucl_file', type=str, default='./coursework2_groupJ/data/ucl_data.h5', help='path to UCL data file')
     return parser.parse_args()
 
 def test(model, loader, label_name='dataset', log_func=print):
@@ -44,10 +44,14 @@ def test(model, loader, label_name='dataset', log_func=print):
         total_tables = 0
         total_non_tables = 0
         
+        # Get the device that the model is on
+        device = next(model.parameters()).device
+        
         log_func(f"Testing on {label_name}...")
         for j, (points, target) in tqdm(enumerate(loader), total=len(loader)):
-            if not args.use_cpu:
-                points, target = points.cuda(), target.cuda()
+            # Move data to the same device as the model
+            points = points.to(device)
+            target = target.to(device)
 
             points = points.transpose(2, 1)
             pred, _ = classifier(points)
@@ -96,17 +100,18 @@ def test(model, loader, label_name='dataset', log_func=print):
         return instance_acc, table_acc, non_table_acc
 
 def main(args):
-    def log_string(str):
-        logger.info(str)
-        print(str)
-
     '''HYPER PARAMETER'''
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-
+    
+    # Set the device (CPU or GPU) with proper fallback
+    device = torch.device('cuda' if torch.cuda.is_available() and not args.use_cpu else 'cpu')
+    
     '''CREATE DIR'''
-    experiment_dir = os.path.join('./log/table_classification/', args.log_dir)
+    experiment_dir = './coursework2_groupJ/results/log/pipelineA'
+    os.makedirs(experiment_dir, exist_ok=True)  # Ensure the directory exists
     
     '''LOG'''
+    # Initialize logger before defining log_string
     logger = logging.getLogger("Model")
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -114,6 +119,12 @@ def main(args):
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+    
+    def log_string(str):
+        logger.info(str)
+        print(str)
+    
+    log_string(f"Using device: {device}")
     log_string('PARAMETER ...')
     log_string(args)
 
@@ -136,13 +147,16 @@ def main(args):
     model = importlib.import_module(args.model)
     classifier = model.get_model(num_class, normal_channel=False)
     
-    if not args.use_cpu:
-        classifier = classifier.cuda()
+    # Move model to the appropriate device
+    classifier = classifier.to(device)
 
-    checkpoint = torch.load(str(experiment_dir) + '/checkpoints/best_model.pth')
+    checkpoint_path = os.path.join('./coursework2_groupJ/weights/pipelineA/checkpoints', 'best_model.pth')
+    
+    # Load checkpoint with appropriate device mapping
+    checkpoint = torch.load(checkpoint_path, map_location=device)
     classifier.load_state_dict(checkpoint['model_state_dict'])
     
-    log_string(f"Model loaded from {experiment_dir}/checkpoints/best_model.pth")
+    log_string(f"Model loaded from {checkpoint_path} to {device}")
     
     # Log metrics if they exist in the checkpoint
     if 'instance_acc' in checkpoint:
