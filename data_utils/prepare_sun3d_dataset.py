@@ -424,7 +424,7 @@ def process_scenes(scenes, output_file, max_points=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='CW2-Dataset/data', 
+    parser.add_argument('--data_dir', type=str, default='./coursework2_groupJ/CW2-Dataset/sun3d_data', 
                         help='Path to dataset directory')
     parser.add_argument('--output', type=str, default=None, 
                         help='Path to output HDF5 file (default: CW2-Dataset/sun3d_{train|test}.h5)')

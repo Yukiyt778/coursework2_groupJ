@@ -2,7 +2,7 @@ import h5py
 import numpy as np
 
 # Path to the h5 file
-h5_file = 'dataset/sun3d_train.h5'
+h5_file = './coursework2_groupJ/data/sun3d_train.h5'
 
 # Open the h5 file
 with h5py.File(h5_file, 'r') as f:

@@ -84,7 +84,7 @@ def process_ucl_data(data_dir, output_h5=None):
 
 if __name__ == "__main__":
     # Path to UCL data directory
-    data_dir = 'dataset/ucl_data'
+    data_dir = './coursework2_groupJ/data/RealSense/ucl_data'
     
     # Process the data
     process_ucl_data(data_dir) 

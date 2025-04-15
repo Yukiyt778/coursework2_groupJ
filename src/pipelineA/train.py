@@ -24,7 +24,6 @@ ROOT_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
 sys.path.append(ROOT_DIR)
 
 # Import the provider module from the root directory
-sys.path.append(ROOT_DIR)  # Add root directory again to be sure
 import provider
 
 # Import the dataset
@@ -36,7 +35,7 @@ def parse_args():
     parser.add_argument('--use_cpu', action='store_true', default=False, help='use cpu mode')
     parser.add_argument('--gpu', type=str, default='0', help='specify gpu device')
     parser.add_argument('--batch_size', type=int, default=24, help='batch size in training')
-    parser.add_argument('--model', default='models.pointnet2_cls_ssg', help='model name')
+    parser.add_argument('--model', default='models.pointnet2.pointnet2_cls_ssg', help='model name')
     parser.add_argument('--epoch', default=100, type=int, help='number of epoch in training')
     
     # Learning rate parameters
@@ -365,7 +364,7 @@ def train_one_fold(train_dataset, val_dataset, args, fold_idx, exp_dir, logger):
         train_non_table_acc_sum = 0.0
         train_f1_sum = 0.0
         train_samples = 0
-        
+
         classifier.train()
         
         for batch_id, (points, target) in tqdm(enumerate(trainDataLoader), total=len(trainDataLoader), smoothing=0.9):
@@ -404,10 +403,10 @@ def train_one_fold(train_dataset, val_dataset, args, fold_idx, exp_dir, logger):
         # Calculate training metrics
         train_loss = train_total_loss / len(trainDataLoader)
         train_acc = train_total_correct / float(train_total)
-        train_table_acc = train_table_acc_sum / train_samples
-        train_non_table_acc = train_non_table_acc_sum / train_samples
-        train_f1 = train_f1_sum / train_samples
-        
+        train_table_acc = train_table_acc_sum / train_samples if train_samples > 0 else 0
+        train_non_table_acc = train_non_table_acc_sum / train_samples if train_samples > 0 else 0
+        train_f1 = train_f1_sum / train_samples if train_samples > 0 else 0
+
         log_string(f'Train Loss: {train_loss:.4f}')
         log_string(f'Train Accuracy: {train_acc:.4f}')
         log_string(f'Train Table Accuracy: {train_table_acc:.4f}')
@@ -552,25 +551,24 @@ def main(args):
     weights_dir = Path('./coursework2_groupJ/weights/pipelineA/')
     weights_dir.mkdir(parents=True, exist_ok=True)
 
+    # Define the checkpoints directory
+    checkpoints_dir = weights_dir.joinpath('checkpoints')
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+
+    # Define results directory for plots
     results_dir = Path('./coursework2_groupJ/results/plots/pipelineA/')
     results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Define log directory
+    log_dir = Path('./coursework2_groupJ/results/log/pipelineA/')
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     # Create different directories based on training mode
     if args.k_fold:
         timestr = str(datetime.datetime.now().strftime('%Y-%m-%d_%H-%M'))
         exp_dir = results_dir.joinpath(f'kfold_{timestr}')
         exp_dir.mkdir(exist_ok=True)
-        log_dir = weights_dir.joinpath('log')
-        log_dir.mkdir(exist_ok=True)
     else:
-        # Define the checkpoints directory
-        checkpoints_dir = weights_dir.joinpath('checkpoints')
-        checkpoints_dir.mkdir(parents=True, exist_ok=True)
-
-        # Define the log directory
-        log_dir = weights_dir.joinpath('log')
-        log_dir.mkdir(parents=True, exist_ok=True)
-        
         # Define the experiment directory for plots
         exp_dir = results_dir
 
@@ -748,7 +746,7 @@ def main(args):
         criterion = criterion.to(device)
 
         # Define the path to the existing model weights
-        checkpoint_path = './coursework2_groupJ/weights/pipeline_a_best_model.pth'
+        checkpoint_path = './coursework2_groupJ/weights/pipelineA/checkpoints/best_model.pth'
 
         try:
             # Load the checkpoint with device mapping
@@ -806,6 +804,13 @@ def main(args):
             
             # Training
             train_total_loss = 0.0
+            train_total_correct = 0
+            train_total = 0
+            train_table_acc_sum = 0.0
+            train_non_table_acc_sum = 0.0
+            train_f1_sum = 0.0
+            train_samples = 0
+
             classifier = classifier.train()
             
             for batch_id, (points, target) in tqdm(enumerate(trainDataLoader), total=len(trainDataLoader), smoothing=0.9):
@@ -828,9 +833,29 @@ def main(args):
                 
                 train_total_loss += loss.item()
                 
+                # Calculate batch metrics
+                correct, table_acc, non_table_acc, f1_score = calculate_metrics(pred, target)
+                train_total_correct += correct
+                train_total += points.size(0)
+                
+                # Keep track of metrics for averaging
+                train_table_acc_sum += table_acc * points.size(0)
+                train_non_table_acc_sum += non_table_acc * points.size(0)
+                train_f1_sum += f1_score * points.size(0)
+                train_samples += points.size(0)
+            
             # Calculate training metrics
             train_loss = train_total_loss / len(trainDataLoader)
+            train_acc = train_total_correct / float(train_total)
+            train_table_acc = train_table_acc_sum / train_samples if train_samples > 0 else 0
+            train_non_table_acc = train_non_table_acc_sum / train_samples if train_samples > 0 else 0
+            train_f1 = train_f1_sum / train_samples if train_samples > 0 else 0
+
             log_string(f'Train Loss: {train_loss:.4f}')
+            log_string(f'Train Accuracy: {train_acc:.4f}')
+            log_string(f'Train Table Accuracy: {train_table_acc:.4f}')
+            log_string(f'Train Non-Table Accuracy: {train_non_table_acc:.4f}')
+            log_string(f'Train F1 Score: {train_f1:.4f}')
             
             # Validation
             classifier = classifier.eval()

@@ -88,7 +88,7 @@ def check_table_labels(base_dir):
     return results
 
 def main():
-    base_dir = 'dataset/sun3d_data'
+    base_dir = './coursework2_groupJ/data/CW2-Dataset/sun3d_data'
     print(f"Checking table labels in {base_dir}...")
     
     results = check_table_labels(base_dir)

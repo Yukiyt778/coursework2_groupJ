@@ -151,7 +151,7 @@ def process_building(building_path, create_empty_labels_if_missing=False):
 
 def main():
     parser = argparse.ArgumentParser(description='Convert depth images to TSDF format')
-    parser.add_argument('--data_dir', type=str, default='CW2-Dataset/data',
+    parser.add_argument('--data_dir', type=str, default='./coursework2_groupJ/CW2-Dataset/RealSense/ucl_data',
                       help='Path to dataset directory')
     parser.add_argument('--building', type=str, default=None,
                       help='Specific building to process (e.g., harvard_tea_2)')
