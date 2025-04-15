@@ -386,3 +386,17 @@
 2025-04-15 22:37:34,207 - Model - INFO - Training curves saved to coursework2_groupJ/results/plots/pipelineA/training_curves.png
 2025-04-15 22:37:34,207 - Model - INFO - Learning rate curve saved to coursework2_groupJ/results/plots/pipelineA/lr_curve.png
 2025-04-15 22:37:34,207 - Model - INFO - End of training...
+2025-04-15 22:56:41,513 - Model - INFO - PARAMETER ...
+2025-04-15 22:56:41,514 - Model - INFO - Namespace(use_cpu=False, gpu='0', batch_size=24, model='models.pointnet2.pointnet2_cls_ssg', epoch=100, learning_rate=0.0001, scheduler='step', lr_decay=0.7, step_size=20, min_lr=1e-06, num_point=1024, optimizer='Adam', log_dir=None, decay_rate=0.0001, train_file='./coursework2_groupJ/data/sun3d_train_fixed.h5', test_file='./coursework2_groupJ/data/sun3d_test_fixed.h5', table_weight=1.0, non_table_weight=1.0, use_weights=True, val_split=0.2, k_fold=False, n_folds=5, random_state=42)
+2025-04-15 22:56:41,514 - Model - INFO - Load dataset ...
+2025-04-15 22:56:41,529 - Model - INFO - Using device: cpu
+2025-04-15 22:56:41,533 - Model - INFO - Dataset split: 166 training samples, 41 validation samples
+2025-04-15 22:56:41,538 - Model - INFO - Training set composition: 127 tables, 39 non-tables
+2025-04-15 22:56:41,538 - Model - INFO - Original class ratio (non-table:table): 0.307
+2025-04-15 22:56:41,538 - Model - INFO - Calculated soft class weights: [1.2868738174438477, 0.7131261825561523]
+2025-04-15 22:56:41,539 - Model - INFO - Using calculated class weights for loss function
+2025-04-15 22:56:41,683 - Model - INFO - Loaded pre-trained model from ./coursework2_groupJ/weights/pipelineA/checkpoints/best_model.pth to cpu
+2025-04-15 22:56:42,386 - Model - INFO - Using learning rate scheduler: step
+2025-04-15 22:56:42,386 - Model - INFO - Initial learning rate: 0.0001
+2025-04-15 22:56:42,386 - Model - INFO - Start training...
+2025-04-15 22:56:42,386 - Model - INFO - Epoch 1 (24/100):
