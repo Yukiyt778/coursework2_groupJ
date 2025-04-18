@@ -18,10 +18,11 @@ import time
 import matplotlib.pyplot as plt
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(BASE_DIR)  # Get the parent directory (project root)
+ROOT_DIR = os.path.dirname(os.path.dirname(BASE_DIR))  # Get the project root (two levels up from pipelineC)
 sys.path.append(ROOT_DIR)  # Add the project root to the path
-sys.path.append(os.path.join(ROOT_DIR, 'models'))
-sys.path.append(os.path.join(ROOT_DIR, 'data_utils'))  # Add data_utils directly
+sys.path.append(os.path.join(ROOT_DIR, 'models/pointnet2'))  # Update path to pointnet2 models
+sys.path.append(os.path.join(ROOT_DIR, 'data_utils'))  # Add path to data_utils
+sys.path.append(os.path.join(ROOT_DIR, 'src/pipelineA'))  # Add path to pipelineA for provider
 
 from data_utils.sun3d_dataset_pytorch import SUN3DDataset, get_data_loaders
 import provider
@@ -44,7 +45,7 @@ def parse_args():
     parser.add_argument('--learning_rate', default=0.001, type=float, help='Initial learning rate [default: 0.001]')
     parser.add_argument('--gpu', type=str, default='0', help='GPU to use [default: GPU 0]')
     parser.add_argument('--optimizer', type=str, default='Adam', help='Adam or SGD [default: Adam]')
-    parser.add_argument('--log_dir', type=str, default=None, help='Log path [default: None]')
+    parser.add_argument('--log_dir', type=str, default='/cs/student/projects1/rai/2024/jiawyang/coursework2_groupJ/results/pipelineC', help='Log path [default: results/pipelineC]')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='weight decay [default: 1e-4]')
     parser.add_argument('--npoint', type=int, default=1024, help='Point Number [default: 1024]')
     parser.add_argument('--step_size', type=int, default=10, help='Decay step for lr decay [default: every 10 epochs]')
@@ -81,19 +82,13 @@ def main(args):
 
     '''CREATE DIR'''
     timestr = str(datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
-    experiment_dir = Path('./log/')
-    experiment_dir.mkdir(exist_ok=True)
     
-    # Create a more structured directory naming
-    experiment_dir = experiment_dir.joinpath('sun3d_binary_seg')
-    experiment_dir.mkdir(exist_ok=True)
+    # Use the absolute path provided in args.log_dir
+    experiment_dir = Path(args.log_dir)
+    experiment_dir.mkdir(exist_ok=True, parents=True)
     
-    if args.log_dir is None:
-        # Use default naming with timestamp only
-        log_name = f"run_{timestr}"
-    else:
-        # Append timestamp to user-provided name to avoid overwriting
-        log_name = f"{args.log_dir}_{timestr}"
+    # Create a timestamped directory for this run
+    log_name = f"sun3d_training_{timestr}"
     
     # Create the final experiment directory
     experiment_dir = experiment_dir.joinpath(log_name)
@@ -175,8 +170,10 @@ def main(args):
 
     '''MODEL LOADING'''
     MODEL = importlib.import_module(args.model)
-    shutil.copy('models/%s.py' % args.model, str(experiment_dir))
-    shutil.copy('models/pointnet2_utils.py', str(experiment_dir))
+    model_path = os.path.join(ROOT_DIR, 'models/pointnet2', f'{args.model}.py')
+    utils_path = os.path.join(ROOT_DIR, 'models/pointnet2/pointnet2_utils.py')
+    shutil.copy(model_path, str(experiment_dir))
+    shutil.copy(utils_path, str(experiment_dir))
 
     classifier = MODEL.get_model(NUM_CLASSES).cuda()
     criterion = MODEL.get_loss().cuda()
