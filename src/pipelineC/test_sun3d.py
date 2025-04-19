@@ -31,10 +31,10 @@ NUM_CLASSES = len(classes)
 def parse_args():
     parser = argparse.ArgumentParser('Model')
     parser.add_argument('--model', type=str, default='pointnet2_sem_seg', help='model name [default: pointnet2_sem_seg]')
-    parser.add_argument('--h5_file', type=str, default='/cs/student/projects1/rai/2024/jiawyang/coursework2_groupJ/data/sun3d_test_fixed.h5', help='Path to test h5 file with point clouds and labels')
+    parser.add_argument('--h5_file', type=str, default='./coursework2_groupJ/data/sun3d_test_fixed.h5', help='Path to test h5 file with point clouds and labels')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch Size during training [default: 16]')
     parser.add_argument('--gpu', type=str, default='0', help='GPU to use [default: GPU 0]')
-    parser.add_argument('--log_dir', type=str, default='/cs/student/projects1/rai/2024/jiawyang/coursework2_groupJ/results/pipelineC/sun3d_radius_tuned/sun3d_training_2025-04-18_17-01-56', help='Experiment root')
+    parser.add_argument('--log_dir', type=str, default='./coursework2_groupJ/results/pipelineC/sun3d_radius_tuned/sun3d_training_2025-04-18_17-01-56', help='Experiment root')
     parser.add_argument('--npoint', type=int, default=1024, help='Point Number [default: 1024]')
     parser.add_argument('--visual', action='store_true', default=False, help='Whether to visualize result [default: False]')
     return parser.parse_args()
@@ -45,6 +45,10 @@ def main(args):
 
     # Setup
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+    
+    # Check CUDA availability and set device accordingly
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    log_string(f'Using device: {device}')
     
     # Update experiment_dir to use the absolute path
     experiment_dir = args.log_dir
@@ -134,9 +138,10 @@ def main(args):
 
     # Load model
     MODEL = importlib.import_module(args.model)
-    classifier = MODEL.get_model(NUM_CLASSES).cuda()
+    classifier = MODEL.get_model(NUM_CLASSES).to(device)  # Use .to(device) instead of .cuda()
 
-    checkpoint = torch.load(os.path.join(experiment_dir, 'checkpoints/best_model.pth'))
+    checkpoint = torch.load(os.path.join(experiment_dir, 'checkpoints/best_model.pth'), 
+                           map_location=device)  # Add map_location for CPU compatibility
     classifier.load_state_dict(checkpoint['model_state_dict'])
     
     with torch.no_grad():
@@ -153,7 +158,7 @@ def main(args):
         
         for i, (points, target) in tqdm(enumerate(test_loader), total=len(test_loader), smoothing=0.9):
             # Points are already in [B, C, N] format from the dataset loader
-            points, target = points.float().cuda(), target.long().cuda()
+            points, target = points.float().to(device), target.long().to(device)
             
             # No need for additional transposition since data is already in correct format
             seg_pred, _ = classifier(points)
@@ -211,4 +216,4 @@ def main(args):
 
 if __name__ == '__main__':
     args = parse_args()
-    main(args) 
+    main(args)

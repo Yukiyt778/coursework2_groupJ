@@ -45,7 +45,7 @@ def parse_args():
     parser.add_argument('--learning_rate', default=0.001, type=float, help='Initial learning rate [default: 0.001]')
     parser.add_argument('--gpu', type=str, default='0', help='GPU to use [default: GPU 0]')
     parser.add_argument('--optimizer', type=str, default='Adam', help='Adam or SGD [default: Adam]')
-    parser.add_argument('--log_dir', type=str, default='/cs/student/projects1/rai/2024/jiawyang/coursework2_groupJ/results/pipelineC', help='Log path [default: results/pipelineC]')
+    parser.add_argument('--log_dir', type=str, default='./coursework2_groupJ/results/pipelineC', help='Log path [default: results/pipelineC]')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='weight decay [default: 1e-4]')
     parser.add_argument('--npoint', type=int, default=1024, help='Point Number [default: 1024]')
     parser.add_argument('--step_size', type=int, default=10, help='Decay step for lr decay [default: every 10 epochs]')

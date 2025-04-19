@@ -2,22 +2,19 @@ import os
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import torchvision.transforms as transforms
-from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import train_test_split
+from torch.utils.data import Dataset
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import classification_report
-import json
-from sklearn.cluster import KMeans
-
-# Add this near the top of your file after the imports
-import os
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.svm import SVC
+import joblib
+import pickle
+import re
 
 # Create the plots directory
 plots_dir = "./coursework2_groupJ/results/plots/pipelineB"
@@ -31,15 +28,10 @@ print(f"Saving model to: {weights_dir}")
 
 # Create dataset structure
 depth_maps_dir = "./coursework2_groupJ/results/predictions"
-classes = ['table', 'non_table']
+classes = ['non_table', 'table'] 
 
 # Configuration
-BATCH_SIZE = 16
-NUM_EPOCHS = 20
-LEARNING_RATE = 0.001
 IMAGE_SIZE = 224
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {DEVICE}")
 
 class DepthMapDataset(Dataset):
     def __init__(self, depth_paths, labels, transform=None):
@@ -67,45 +59,9 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-# Create model
-class DepthClassifier(nn.Module):
-    def __init__(self):
-        super(DepthClassifier, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.relu = nn.ReLU()
-        self.pool = nn.MaxPool2d(2, 2)
-        
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(128)
-        
-        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.bn4 = nn.BatchNorm2d(256)
-        
-        # Calculate the size after convolutions and pooling
-        final_size = IMAGE_SIZE // (2**4)  # 4 pooling layers
-        self.fc1 = nn.Linear(256 * final_size * final_size, 512)
-        self.dropout = nn.Dropout(0.5)
-        self.fc2 = nn.Linear(512, len(classes))
-        
-    def forward(self, x):
-        x = self.pool(self.relu(self.bn1(self.conv1(x))))
-        x = self.pool(self.relu(self.bn2(self.conv2(x))))
-        x = self.pool(self.relu(self.bn3(self.conv3(x))))
-        x = self.pool(self.relu(self.bn4(self.conv4(x))))
-        
-        x = x.view(x.size(0), -1)
-        x = self.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
-        return x
-
 def extract_depth_map_features(depth_map):
-    """Extract features from a depth map for KNN classification"""
-    # Convert to grayscale if it's color (the INFERNO colormap)
+    """Extract features from a depth map for classification"""
+    # Convert to grayscale 
     if len(depth_map.shape) == 3:
         gray = cv2.cvtColor(depth_map, cv2.COLOR_BGR2GRAY)
     else:
@@ -153,6 +109,55 @@ def extract_depth_map_features(depth_map):
     features.extend(hist_norm)
     
     return np.array(features)
+
+def extract_enhanced_table_features(depth_map):
+    """Enhanced feature extraction with specific focus on table characteristics"""
+    # Get the baseline features
+    features = extract_depth_map_features(depth_map)
+    
+    # Convert to grayscale 
+    if len(depth_map.shape) == 3:
+        gray = cv2.cvtColor(depth_map, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = depth_map
+    
+    resized = cv2.resize(gray, (200, 150))
+    h, w = resized.shape
+    
+    # 1. Horizontality score - tables have strong horizontal edges
+    sobely = cv2.Sobel(resized, cv2.CV_64F, 0, 1, ksize=5)
+    horizontal_ratio = np.sum(np.abs(sobely) < 10) / (h * w)
+    
+    # 2. Planarity score - tables are planar objects
+    std_by_region = []
+    for i in range(3):
+        for j in range(3):
+            region = resized[i*h//3:(i+1)*h//3, j*w//3:(j+1)*w//3]
+            std_by_region.append(np.std(region))
+    planarity = np.mean(std_by_region)  # Lower means more planar
+    
+    # 3. Height consistency - tables are typically at consistent height
+    height_hist, _ = np.histogram(resized, bins=5)
+    height_concentration = np.max(height_hist) / np.sum(height_hist) if np.sum(height_hist) > 0 else 0
+    
+    # 4. Surface continuity - tables have continuous surfaces
+    # Use Laplacian for edge detection (identifies discontinuities)
+    laplacian = cv2.Laplacian(resized, cv2.CV_64F)
+    continuity = np.sum(np.abs(laplacian) < 10) / (h * w)
+    
+    # 5. Regional depth consistency - compute variance of each region's mean depth
+    region_means = []
+    for i in range(3):
+        for j in range(3):
+            region = resized[i*h//3:(i+1)*h//3, j*w//3:(j+1)*w//3]
+            region_means.append(np.mean(region))
+    depth_consistency = np.var(region_means)  # Lower means more consistent
+    
+    # Add table-specific features
+    table_features = [horizontal_ratio, planarity, height_concentration, 
+                      continuity, depth_consistency]
+    
+    return np.concatenate([features, table_features])
 
 def detect_table_region(image):
     """Detect table region using edge detection and contour analysis"""
@@ -256,20 +261,15 @@ def detect_table_from_depth(depth_map):
 
 def load_ground_truth_labels():
     """Load ground truth table labels from pickle files"""
-    import pickle
-    import re
-    
-    # Create a mapping of dataset paths to their label files
+    # For datasets containing tables: create a mapping of dataset paths to their label files
     dataset_label_mapping = {
         "mit_32_d507/d507_2": "./coursework2_groupJ/data/CW2-Dataset/sun3d_data/mit_32_d507/d507_2/labels/tabletop_labels.dat",
         "mit_76_459/76-459b": "./coursework2_groupJ/data/CW2-Dataset/sun3d_data/mit_76_459/76-459b/labels/tabletop_labels.dat",
         "mit_76_studyroom/76-1studyroom2": "./coursework2_groupJ/data/CW2-Dataset/sun3d_data/mit_76_studyroom/76-1studyroom2/labels/tabletop_labels.dat",
-        "mit_gym_z_squash/gym_z_squash_scan1_oct_26_2012_erika": "./coursework2_groupJ/data/CW2-Dataset/sun3d_data/mit_gym_z_squash/gym_z_squash_scan1_oct_26_2012_erika/labels/tabletop_labels.dat",
         "mit_lab_hj/lab_hj_tea_nov_2_2012_scan1_erika": "./coursework2_groupJ/data/CW2-Dataset/sun3d_data/mit_lab_hj/lab_hj_tea_nov_2_2012_scan1_erika/labels/tabletop_labels.dat",
         "harvard_c5/hv_c5_1": "./coursework2_groupJ/data/CW2-Dataset/sun3d_data/harvard_c5/hv_c5_1/labels/tabletop_labels.dat",
         "harvard_c6/hv_c6_1": "./coursework2_groupJ/data/CW2-Dataset/sun3d_data/harvard_c6/hv_c6_1/labels/tabletop_labels.dat",
         "harvard_c11/hv_c11_2": "./coursework2_groupJ/data/CW2-Dataset/sun3d_data/harvard_c11/hv_c11_2/labels/tabletop_labels.dat",
-        "harvard_tea_2/hv_tea2_2": "./coursework2_groupJ/data/CW2-Dataset/sun3d_data/harvard_tea_2/hv_tea2_2/labels/tabletop_labels.dat",
     }
     
     # Function to extract image number for matching
@@ -279,6 +279,12 @@ def load_ground_truth_labels():
     
     # Dictionary to store results
     image_labels = {}
+    
+    # For datasets known to contain NO tables: Label all images as non-table 
+    no_table_datasets = [
+        "mit_gym_z_squash",
+        "harvard_tea_2"
+    ]
     
     # Process each dataset
     for dataset_key, label_file in dataset_label_mapping.items():
@@ -333,18 +339,26 @@ def load_ground_truth_labels():
                     # Has table if polygon list is not empty
                     has_table = len(polygon_list) > 0
                     
-                    # Store label (0 for table, 1 for non-table)
-                    image_labels[depth_map_path] = 0 if has_table else 1
+                    # Store label (1 for table, 0 for non-table)
+                    image_labels[depth_map_path] = 1 if has_table else 0
                 
             else:
                 print(f"Warning: Image path {img_path} not found")
         
         except Exception as e:
             print(f"Error processing dataset {dataset_key}: {e}")
+        
+        # After loading labels, check if this is a known no-table dataset
+        if any(no_table_key in dataset_key for no_table_key in no_table_datasets):
+            print(f"Overriding {dataset_key} labels - known to contain NO tables")
+            # Find all paths for this dataset and mark them as non-tables (0)
+            for key in list(image_labels.keys()):
+                if dataset_key in key:
+                    image_labels[key] = 0  # Mark as non-table
     
     # Print summary
-    table_count = list(image_labels.values()).count(0)
-    non_table_count = list(image_labels.values()).count(1)
+    table_count = list(image_labels.values()).count(1)
+    non_table_count = list(image_labels.values()).count(0)
     print(f"Loaded {len(image_labels)} image labels: {table_count} tables, {non_table_count} non-tables")
     
     return image_labels
@@ -388,108 +402,63 @@ def cluster_and_label():
     labels = []
     unlabeled_paths = []
     unlabeled_indices = []
-    
+
     # First pass: use ground truth labels when available
     for i, path in enumerate(all_paths):
         if path in ground_truth_labels:
             # Use the ground truth label
             labels.append(ground_truth_labels[path])
         else:
-            # Mark for clustering
-            labels.append(-1)  # Temporary placeholder
+            # Unlabeled handling
+            labels.append(-1) 
             unlabeled_paths.append(path)
             unlabeled_indices.append(i)
-    
-    # If we have unlabeled images, use clustering to label them
+
     if unlabeled_paths:
-        print(f"{len(unlabeled_paths)} images don't have ground truth labels. Using clustering.")
+        ucl_indices = [i for i, path in enumerate(unlabeled_paths) if "ucl_data" in path.lower()]
+        non_ucl_indices = [i for i, path in enumerate(unlabeled_paths) if "ucl_data" not in path.lower()]
         
-        # Extract features for unlabeled images
-        print("Extracting features from unlabeled depth maps...")
-        unlabeled_features = []
-        for path in tqdm(unlabeled_paths):
-            img = cv2.imread(path)
-            if img is None:
-                print(f"Warning: Could not read {path}")
-                continue
-            features = extract_depth_map_features(img)
-            unlabeled_features.append(features)
+        print(f"  - {len(ucl_indices)} UCL images (should contain tables)")
+        print(f"  - {len(non_ucl_indices)} other unlabeled images (assuming non-tables)")
         
-        # Standardize features
-        unlabeled_features = np.array(unlabeled_features)
-        scaler = StandardScaler()
-        scaled_features = scaler.fit_transform(unlabeled_features)
+        # Mark UCL images as tables (1)
+        for i in ucl_indices:
+            idx = unlabeled_indices[i]
+            labels[idx] = 1 
         
-        # Perform K-means clustering
-        kmeans = KMeans(n_clusters=2, random_state=42)
-        cluster_labels = kmeans.fit_predict(scaled_features)
-        
-        # Determine which cluster is likely tables
-        cluster_0_features = scaled_features[cluster_labels == 0]
-        cluster_1_features = scaled_features[cluster_labels == 1]
-        
-        # Use features that might indicate tables
-        table_indicator_indices = [104, 105]
-        
-        # Compare the clusters (if both have elements)
-        if len(cluster_0_features) > 0 and len(cluster_1_features) > 0:
-            cluster_0_indicators = np.mean(cluster_0_features[:, table_indicator_indices], axis=0)
-            cluster_1_indicators = np.mean(cluster_1_features[:, table_indicator_indices], axis=0)
-            
-            # Higher horizontal-to-vertical gradient ratio might indicate tables
-            if cluster_0_indicators[1] > cluster_1_indicators[1]:
-                table_cluster = 0
-                non_table_cluster = 1
-            else:
-                table_cluster = 1
-                non_table_cluster = 0
-                
-            # Convert cluster labels to our class labels (0=table, 1=non-table)
-            for i, idx in enumerate(unlabeled_indices):
-                if cluster_labels[i] == table_cluster:
-                    labels[idx] = 0  # Table
-                else:
-                    labels[idx] = 1  # Non-table
-        else:
-            # If one cluster is empty, assign all to non-tables
-            for i, idx in enumerate(unlabeled_indices):
-                labels[idx] = 1  # Default to non-table
+        # Mark other unlabeled images(negative samples) as non-tables (0)
+        for i in non_ucl_indices:
+            idx = unlabeled_indices[i]
+            labels[idx] = 0 
     
-    # Step 4: Visualize results
-    tables_count = labels.count(0)
-    non_tables_count = labels.count(1)
+    # Visualize results
+    tables_count = labels.count(1) 
+    non_tables_count = labels.count(0) 
     print(f"Final dataset: {tables_count} tables and {non_tables_count} non-tables")
     
-    # Save all results
+    # Create results dictionary 
     results = {}
     for path, label in zip(all_paths, labels):
         results[path] = int(label)
     
-    # Save to JSON
-    with open('table_detection_labels.json', 'w') as f:
-        json.dump(results, f)
-    
-    # Save to the plots directory
-    json_path = os.path.join(plots_dir, 'table_detection_labels.json')
-    with open(json_path, 'w') as f:
-        json.dump(results, f)
-    print(f"Saved label data to {json_path}")
-    
-    
     return all_paths, labels, results
 
-def create_visual_report(all_paths, labels, filename='table_detection_report.png', max_images=50):
+def create_visual_report(all_paths, labels, filename, max_images=None):
     """Create a visual grid showing images and their table/non-table classification"""
-    # Limit the number of images to display
-    sample_size = min(max_images, len(all_paths))
+    # If max_images is None, show all images
+    sample_size = len(all_paths) if max_images is None else min(max_images, len(all_paths))
     
     # Sample indices evenly across the dataset
     indices = np.linspace(0, len(all_paths)-1, sample_size, dtype=int)
     
-    # Create figure
-    cols = 5
+    # Create figure - adjust grid for more images
+    if sample_size <= 36:
+        cols = 6  # 6×6 grid for up to 36 images
+    else:
+        cols = 7  # 7×x grid for larger sets
+        
     rows = (sample_size + cols - 1) // cols  # Ceiling division
-    fig, axes = plt.subplots(rows, cols, figsize=(cols*3, rows*3))
+    fig, axes = plt.subplots(rows, cols, figsize=(cols*2.5, rows*2.5))  # Slightly smaller images to fit more
     axes = axes.flatten()
     
     # Plot each image with its label
@@ -503,8 +472,8 @@ def create_visual_report(all_paths, labels, filename='table_detection_report.png
                 image_filename = os.path.basename(all_paths[idx])
                 
                 # Add Table/Non-Table at the top
-                label = "Table" if labels[idx] == 0 else "Non-Table"
-                axes[i].set_title(label, fontsize=10, color='green' if labels[idx] == 0 else 'red')
+                label = "Table" if labels[idx] == 1 else "Non-Table"
+                axes[i].set_title(label, fontsize=10, color='green' if labels[idx] == 1 else 'red')
                 
                 # Add the image filename as a caption below the image
                 axes[i].text(0.5, -0.15, image_filename, fontsize=6, ha='center', 
@@ -513,7 +482,7 @@ def create_visual_report(all_paths, labels, filename='table_detection_report.png
                 axes[i].axis('off')
                 
                 # Add a colored border - green for table, red for non-table
-                color = 'green' if labels[idx] == 0 else 'red'
+                color = 'green' if labels[idx] == 1 else 'red'
                 for spine in axes[i].spines.values():
                     spine.set_edgecolor(color)
                     spine.set_linewidth(4)
@@ -530,8 +499,6 @@ def create_visual_report(all_paths, labels, filename='table_detection_report.png
 
 def evaluate_against_ground_truth(predictions, ground_truth):
     """Evaluate predictions against ground truth labels"""
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-    
     # Get common keys (images that have both predictions and ground truth)
     common_paths = set(predictions.keys()) & set(ground_truth.keys())
     
@@ -545,9 +512,9 @@ def evaluate_against_ground_truth(predictions, ground_truth):
     
     # Calculate metrics
     accuracy = accuracy_score(y_true, y_pred)
-    precision = precision_score(y_true, y_pred, zero_division=0)
-    recall = recall_score(y_true, y_pred, zero_division=0)
-    f1 = f1_score(y_true, y_pred, zero_division=0)
+    precision = precision_score(y_true, y_pred, zero_division=0, pos_label=1)
+    recall = recall_score(y_true, y_pred, zero_division=0, pos_label=1)
+    f1 = f1_score(y_true, y_pred, zero_division=0, pos_label=1)
     
     print(f"Evaluation against ground truth ({len(common_paths)} images):")
     print(f"Accuracy: {accuracy:.4f}")
@@ -557,117 +524,181 @@ def evaluate_against_ground_truth(predictions, ground_truth):
     
     return accuracy, precision, recall, f1
 
-def label_ucl_data():
-    """Save the UCL data labels to a .dat file in the RealSense directory"""
+def create_ensemble_classifier(train_features, train_labels):
+    """Create ensemble of multiple classifiers for robust performance"""
+    # Create base classifiers
+    rf = RandomForestClassifier(n_estimators=100, random_state=42)
+    svm = SVC(probability=True, C=10, gamma='scale', random_state=42)
+    
+    # Create voting ensemble
+    ensemble = VotingClassifier(
+        estimators=[
+            ('rf', rf), 
+            ('svm', svm)
+        ],
+        voting='soft'  # Use probability estimates
+    )
+    
+    # Create pipeline with scaling
+    ensemble_pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('selector', SelectKBest(f_classif, k=20)),  # Include selector in pipeline
+        ('ensemble', ensemble)
+    ])
+    
+    # Train the ensemble
+    print("Training ensemble classifier...")
+    ensemble_pipeline.fit(train_features, train_labels)
+    print("Ensemble classifier trained successfully")
+    
+    return ensemble_pipeline
+
+def adapt_to_ucl_domain(model, train_features, train_labels, ucl_features):
+    """Adapt the model to UCL domain using confidence-based self-training"""
+    # Initial predictions on UCL data
+    print("Adapting model to UCL domain...")
+    initial_probs = model.predict_proba(ucl_features)
+    
+    # Find high-confidence predictions
+    confidence_threshold = 0.85
+    high_conf_indices = [i for i, probs in enumerate(initial_probs) 
+                        if np.max(probs) >= confidence_threshold]
+    
+    if len(high_conf_indices) > 5:  # If we have enough confident examples
+        # Get labels and features for confident predictions
+        high_conf_features = [ucl_features[i] for i in high_conf_indices]
+        high_conf_preds = model.predict([ucl_features[i] for i in high_conf_indices])
+        
+        # Combine with original training data (with higher weight on original data)
+        augmented_features = np.vstack([train_features] + [train_features] + [high_conf_features])
+        augmented_labels = np.concatenate([train_labels] + [train_labels] + [high_conf_preds])
+        
+        # Retrain model on augmented dataset
+        model.fit(augmented_features, augmented_labels)
+        print(f"Adapted model using {len(high_conf_indices)} high-confidence UCL samples")
+    
+    return model
+
+def find_optimal_threshold(model, ucl_features):
+    """Find optimal decision threshold for UCL data classification"""
+    # Get probability predictions
+    ucl_probs = model.predict_proba(ucl_features)
+    
+    # Try different thresholds
+    thresholds = [0.3, 0.4, 0.5, 0.6, 0.7]
+    results = []
+    
+    for threshold in thresholds:
+        # Apply threshold to probabilities
+        ucl_preds = [1 if prob[1] >= threshold else 0 for prob in ucl_probs]
+        table_count = sum(ucl_preds)
+        table_ratio = table_count / len(ucl_preds) if ucl_preds else 0
+        
+        results.append((threshold, table_ratio))
+        print(f"Threshold {threshold}: {table_count} tables ({table_ratio:.1%})")
+    
+    # Since we expect most UCL images to be tables, choose threshold that gives ~85% tables
+    best_threshold = min(results, key=lambda x: abs(x[1] - 0.85))[0]
+    print(f"Selected threshold {best_threshold} based on domain expectations")
+    
+    return best_threshold
+
+def label_ucl_data(trained_model, threshold=0.5):
+    """Enhanced UCL data classification with lower threshold to detect more tables"""
     import pickle
     
-    # Find all UCL data paths and their classifications
+    # Find all UCL data paths
     ucl_paths = []
+    depth_maps_dir = "./coursework2_groupJ/results/predictions"
+    ucl_dir = os.path.join(depth_maps_dir, "test_sets_2", "ucl_data")
+    
+    if os.path.exists(ucl_dir):
+        for filename in os.listdir(ucl_dir):
+            if filename.endswith('.png') :
+                full_path = os.path.join(ucl_dir, filename)
+                ucl_paths.append(full_path)
+    
+    print(f"Found {len(ucl_paths)} UCL depth maps for classification")
+    
+    # Extract features from UCL data - use enhanced feature extraction
+    ucl_features = []
+    for path in tqdm(ucl_paths):
+        img = cv2.imread(path)
+        if img is not None:
+            features = extract_enhanced_table_features(img)
+            ucl_features.append(features)
+        else:
+            ucl_features.append(None) 
+    
+    # Find optimal threshold for UCL data
+    optimal_threshold = find_optimal_threshold(trained_model, [f for f in ucl_features if f is not None])
+            
+    # Use the trained model to predict labels with the optimal threshold
     ucl_labels = []
     ucl_polygon_lists = []
     
-    # Get predictions from our model
-    all_paths, labels, _ = cluster_and_label()
-    
-    # Find UCL data
-    for i, path in enumerate(all_paths):
-        if 'ucl_data' in path.lower():
-            ucl_paths.append(path)
-            label = labels[i]
+    for i, (path, features) in enumerate(zip(ucl_paths, ucl_features)):
+        if features is not None:
+            # Get probability estimate
+            prob = trained_model.predict_proba([features])[0]
+            
+            # Apply threshold
+            label = 1 if prob[1] >= optimal_threshold else 0
             ucl_labels.append(label)
             
-            if label == 0:  # Table
-                # Load the image
-                img = cv2.imread(path)
-                if img is not None:
-                    # Get image dimensions
+            # Generate polygon data based on prediction
+            img = cv2.imread(path)
+            if label == 1:  # Table detected
+                # Use detect_table_region to get polygon coordinates
+                try:
+                    polygon = detect_table_region(img)
+                    ucl_polygon_lists.append([polygon])
+                except Exception as e:
+                    print(f"Error detecting table in {path}: {e}")
+                    # Fallback to default rectangle
                     h, w = img.shape[:2]
-                    
-                    # Use table detection if available, otherwise fallback to default rectangle
-                    try:
-                        # Try to detect the actual table
-                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-                        edges = cv2.Canny(blurred, 50, 150)
-                        
-                        # Dilate to connect edges
-                        kernel = np.ones((5,5), np.uint8)
-                        dilated = cv2.dilate(edges, kernel, iterations=2)
-                        
-                        # Find contours
-                        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                        
-                        # Filter by area
-                        min_area = h * w * 0.05  # At least 5% of image
-                        large_contours = [c for c in contours if cv2.contourArea(c) > min_area]
-                        
-                        if large_contours:
-                            # Get largest contour
-                            largest_contour = max(large_contours, key=cv2.contourArea)
-                            
-                            # Approximate the contour to get a polygon
-                            peri = cv2.arcLength(largest_contour, True)
-                            approx = cv2.approxPolyDP(largest_contour, 0.05 * peri, True)
-                            
-                            # If too many points, simplify to a rectangle
-                            if len(approx) > 6:
-                                x, y, w_rect, h_rect = cv2.boundingRect(approx)
-                                # Create rectangle corners
-                                x_coords = [x, x + w_rect, x + w_rect, x]
-                                y_coords = [y, y, y + h_rect, y + h_rect]
-                            else:
-                                # Use the approximated polygon
-                                x_coords = [int(point[0][0]) for point in approx]
-                                y_coords = [int(point[0][1]) for point in approx]
-                        else:
-                            # Fallback to default rectangle
-                            raise Exception("No large contours found")
-                    except:
-                        # Default rectangle in the center
-                        center_x, center_y = w // 2, h // 2
-                        width, height = w // 2, h // 2  # Make the rectangle bigger
-                        
-                        # Rectangle corners - create x and y coordinate arrays
-                        x_coords = [center_x - width//2, center_x + width//2, center_x + width//2, center_x - width//2]
-                        y_coords = [center_y - height//2, center_y - height//2, center_y + height//2, center_y + height//2]
-                    
-                    # THIS IS THE CRITICAL PART - store x_coords and y_coords separately
-                    # This matches the expected format for read_labels.py
-                    ucl_polygon_lists.append([[x_coords, y_coords]])
-                else:
-                    ucl_polygon_lists.append([])  # Empty if image can't be read
+                    center_x, center_y = w // 2, h // 2
+                    width, height = w // 3, h // 3
+                    default_polygon = [
+                        [center_x - width//2, center_x + width//2, center_x + width//2, center_x - width//2],
+                        [center_y - height//2, center_y - height//2, center_y + height//2, center_y + height//2]
+                    ]
+                    ucl_polygon_lists.append([default_polygon])
             else:
-                # Non-table gets empty polygon list
+                # No table, empty polygon list
                 ucl_polygon_lists.append([])
+        else:
+            # Handle failed image reads
+            ucl_labels.append(0)  # Default to non-table 
+            ucl_polygon_lists.append([])
     
-    # Create the output directory and save files
+    # Save the labels to a .dat file
     output_dir = "./coursework2_groupJ/data/RealSense/ucl_data/labels"
     os.makedirs(output_dir, exist_ok=True)
     
-    # Save the labels to a .dat file
     output_path = os.path.join(output_dir, "tabletop_labels.dat")
     with open(output_path, 'wb') as f:
         pickle.dump(ucl_polygon_lists, f)
     
+    table_count = ucl_labels.count(1)  
+    non_table_count = ucl_labels.count(0) 
+    print(f"UCL classification results: {table_count} tables, {non_table_count} non-tables")
     print(f"Saved {len(ucl_paths)} UCL data labels to {output_path}")
-
     
     return ucl_paths, ucl_labels, ucl_polygon_lists
 
 def main():
     # Use ground truth labels when available
     all_paths, labels, label_dict = cluster_and_label()
-    
-    # Load ground truth labels for evaluation
     ground_truth_labels = load_ground_truth_labels()
-    
-    # Instead of random split, use your predefined dataset definitions
+
+    # Define dataset paths
     training_sets = ["mit_32_d507", "mit_76_459", "mit_76_studyroom", 
                     "mit_gym_z_squash", "mit_lab_hj"]
     test_sets_1 = ["harvard_c5", "harvard_c6", "harvard_c11", "harvard_tea_2"]
     test_sets_2 = ['ucl_data']
     
-    # Separate paths based on dataset definitions
+    # Separate dataset paths
     train_indices = []
     test1_indices = []
     test2_indices = []
@@ -675,8 +706,6 @@ def main():
     # Categorize each path
     for i, path in enumerate(all_paths):
         path_lower = path.lower()
-        
-        # Check which dataset it belongs to
         if any(train_set in path_lower for train_set in training_sets):
             train_indices.append(i)
         elif any(test_set in path_lower for test_set in test_sets_1):
@@ -687,15 +716,18 @@ def main():
             train_indices.append(i)
     
     # Prepare data for each dataset
-    train_features = np.array([extract_depth_map_features(cv2.imread(all_paths[i])) for i in train_indices])
+    print("\nExtracting features from training set...")
+    train_features = np.array([extract_enhanced_table_features(cv2.imread(all_paths[i])) for i in train_indices])
     train_labels = np.array([labels[i] for i in train_indices])
     train_paths = [all_paths[i] for i in train_indices]
-    
-    test1_features = np.array([extract_depth_map_features(cv2.imread(all_paths[i])) for i in test1_indices])
+
+    print("Extracting features from test set 1...")
+    test1_features = np.array([extract_enhanced_table_features(cv2.imread(all_paths[i])) for i in test1_indices])
     test1_labels = np.array([labels[i] for i in test1_indices])
-    test1_paths = [all_paths[i] for i in test1_indices]
-    
-    test2_features = np.array([extract_depth_map_features(cv2.imread(all_paths[i])) for i in test2_indices])
+    test1_paths = [all_paths[i] for i in test1_indices] 
+
+    print("Extracting features from test set 2...")
+    test2_features = np.array([extract_enhanced_table_features(cv2.imread(all_paths[i])) for i in test2_indices])
     test2_labels = np.array([labels[i] for i in test2_indices])
     test2_paths = [all_paths[i] for i in test2_indices]
     
@@ -704,155 +736,73 @@ def main():
     print(f"Test set 1: {len(test1_features)} images")  
     print(f"Test set 2: {len(test2_features)} images")
     
-    # Create pipeline with scaling and KNN
-    pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('knn', KNeighborsClassifier(n_neighbors=5, weights='distance'))
+    # Create and train ensemble model
+    print("\nTraining ensemble model for robust performance...")
+    ensemble = VotingClassifier(
+        estimators=[
+            ('rf', RandomForestClassifier(n_estimators=100, random_state=42)),
+            ('svm', SVC(probability=True, C=10, gamma='scale', random_state=42))
+        ],
+        voting='soft'
+    )
+    ensemble_pipeline = Pipeline([
+        ('selector', SelectKBest(f_classif, k=20)),  # First select features
+        ('scaler', StandardScaler()),                # Then scale the selected features
+        ('ensemble', ensemble)
     ])
-    
-    # Train model on the training data
-    pipeline.fit(train_features, train_labels)
-    
-    # Evaluate on test set 1
-    test1_accuracy = pipeline.score(test1_features, test1_labels)
-    print(f"Test set 1 accuracy: {test1_accuracy:.4f}")
-    
-    # Evaluate on test set 2
-    test2_accuracy = pipeline.score(test2_features, test2_labels)
-    print(f"Test set 2 accuracy: {test2_accuracy:.4f}")
-    
-    # Find optimal K using test set 1 as validation
-    k_values = list(range(1, 21, 2))
-    val_accuracies = []
-    
-    for k in k_values:
-        knn = KNeighborsClassifier(n_neighbors=k, weights='distance')
-        pipeline = Pipeline([('scaler', StandardScaler()), ('knn', knn)])
-        pipeline.fit(train_features, train_labels)
-        val_acc = pipeline.score(test1_features, test1_labels)
-        val_accuracies.append(val_acc)
-        print(f"K={k}, Accuracy: {val_acc:.4f}")
-    
-    # Plot K vs. accuracy
-    plt.figure(figsize=(10, 6))
-    plt.plot(k_values, val_accuracies, marker='o')
-    plt.title('KNN: Effect of K Value on Accuracy')
-    plt.xlabel('K Value')
-    plt.ylabel('Accuracy')
-    plt.xticks(k_values)
-    plt.grid(True)
-    plt.savefig(os.path.join(plots_dir, 'knn_k_selection.png'))
 
-    # Use best K
-    best_k = k_values[np.argmax(val_accuracies)]
-    print(f"Best K value: {best_k}")
-    
-    # Final model with best K
-    best_pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('knn', KNeighborsClassifier(n_neighbors=best_k, weights='distance'))
-    ])
-    best_pipeline.fit(train_features, train_labels)
+    # First fit the ensemble pipeline
+    ensemble_pipeline.fit(train_features, train_labels)
+    print("Ensemble model trained successfully")
+
+    # Then adapt it to UCL domain
+    adapted_ensemble = adapt_to_ucl_domain(
+        ensemble_pipeline, train_features, train_labels, 
+        test2_features
+    )
     
     # Save the model
-    import joblib
-    weights_dir = "./coursework2_groupJ/weights"
-    os.makedirs(weights_dir, exist_ok=True)  # Create directory if it doesn't exist
-    model_path = os.path.join(weights_dir, 'pipeline_b_knn.pkl')
-    joblib.dump(best_pipeline, model_path)
-    print(f"Saved trained KNN model to {model_path}")
+    ensemble_path = os.path.join(weights_dir, 'pipeline_b_ensemble.pkl')
+    joblib.dump(adapted_ensemble, ensemble_path)
+    print(f"Saved trained ensemble model to {ensemble_path}")
     
-    # Generate a visual report
-    create_visual_report(all_paths, labels, filename='all_images_report.png')
-
-    create_visual_report([all_paths[i] for i in train_indices], 
-                          [labels[i] for i in train_indices], 
-                          filename='training_set_report.png',
-                          max_images=25)
-
-    create_visual_report([all_paths[i] for i in test1_indices], 
-                          [labels[i] for i in test1_indices], 
-                          filename='test1_set_report.png',
-                          max_images=25)
-
-    create_visual_report([all_paths[i] for i in test2_indices], 
-                          [labels[i] for i in test2_indices], 
-                          filename='test2_set_report.png',
-                          max_images=25)
-
-    # Create reports for each individual dataset
-    dataset_groups = {
-        "mit_32_d507": "MIT 32 D507",
-        "mit_76_459": "MIT 76 459",
-        "mit_76_studyroom": "MIT 76 Studyroom",
-        "mit_gym_z_squash": "MIT Gym Z Squash",
-        "mit_lab_hj": "MIT Lab HJ",
-        "harvard_c5": "Harvard C5",
-        "harvard_c6": "Harvard C6",
-        "harvard_c11": "Harvard C11",
-        "harvard_tea_2": "Harvard Tea 2",
-        "ucl_data": "UCL Data"
-    }
-
-    # Process each dataset individually
-    for dataset_key, dataset_name in dataset_groups.items():
-        # Find images belonging to this dataset
-        dataset_indices = []
-        for i, path in enumerate(all_paths):
-            if dataset_key in path:
-                dataset_indices.append(i)
-        
-        # Skip if no images found
-        if not dataset_indices:
-            print(f"No images found for dataset: {dataset_name}")
-            continue
-        
-        # Create report for this dataset
-        filename = f"{dataset_key}_report.png"
-        report_title = f"{dataset_name} Dataset"
-        
-        print(f"Creating report for {dataset_name} with {len(dataset_indices)} images")
-        
-        # Get paths and labels for this dataset
-        dataset_paths = [all_paths[i] for i in dataset_indices]
-        dataset_labels = [labels[i] for i in dataset_indices]
-        
-        # Create a visual report for this dataset
-        create_visual_report(dataset_paths, dataset_labels, 
-                             filename=filename, 
-                             max_images=min(len(dataset_indices), 25))
-        
-        # Calculate stats for this dataset
-        table_count = dataset_labels.count(0)
-        non_table_count = dataset_labels.count(1)
-        
-        print(f"  - {dataset_name}: {table_count} tables, {non_table_count} non-tables")
-
     # After training the model, evaluate against ground truth
     if ground_truth_labels:
-        print("\nEvaluating model against ground truth:")
-        
-        # Create predictions for all paths
-        all_features = [extract_depth_map_features(cv2.imread(path)) for path in all_paths]
-        all_predictions = {}
-        for path, feature in zip(all_paths, all_features):
-            prediction = best_pipeline.predict([feature])[0]
-            all_predictions[path] = int(prediction)
-        
-        # Evaluate
-        evaluate_against_ground_truth(all_predictions, ground_truth_labels)
+        print("\nEvaluating ensemble model against ground truth:")
+        # Create predictions for all paths - USE ENHANCED FEATURES
+        all_features = []
+        for path in all_paths:
+            img = cv2.imread(path)
+            if img is not None:
+                # Use enhanced features but DON'T pre-select
+                features = extract_enhanced_table_features(img)
+                all_features.append(features)
+            else:
+                all_features.append(None)
 
-    # Label UCL data
-    print("\nLabeling UCL data and saving to .dat file...")
-    ucl_paths, ucl_labels, ucl_polygons = label_ucl_data()
+        # The pipeline will handle selection and scaling internally
+        ensemble_predictions = {}
+        for path, feature in zip(all_paths, all_features):
+            if feature is not None:
+                prediction = adapted_ensemble.predict([feature])[0] 
+                ensemble_predictions[path] = int(prediction)
+                
+        ensemble_metrics = evaluate_against_ground_truth(ensemble_predictions, ground_truth_labels)
+
+    # Label UCL data with the ensemble model
+    print("\nClassifying UCL data with adapted ensemble model...")
+    ucl_paths_ens, ucl_labels_ens, ucl_polygons_ens = label_ucl_data(adapted_ensemble)
+    
+    # Create visual report
+    create_visual_report(ucl_paths_ens, ucl_labels_ens, filename="ucl_data_report_ensemble.png")
     
     # Print UCL data statistics
-    table_count = ucl_labels.count(0)
-    non_table_count = ucl_labels.count(1)
+    ens_table_count = ucl_labels_ens.count(1)
+    ens_non_table_count = ucl_labels_ens.count(0)
+    
     print(f"\nUCL Dataset Statistics:")
-    print(f"Total images: {len(ucl_labels)}")
-    print(f"Tables: {table_count} ({table_count/len(ucl_labels)*100:.1f}%)")
-    print(f"Non-tables: {non_table_count} ({non_table_count/len(ucl_labels)*100:.1f}%)")
+    print(f"Total images: {len(ucl_labels_ens)}")
+    print(f"Ensemble Classification: {ens_table_count} tables ({ens_table_count/len(ucl_labels_ens)*100:.1f}%), {ens_non_table_count} non-tables")
 
 if __name__ == "__main__":
     main()

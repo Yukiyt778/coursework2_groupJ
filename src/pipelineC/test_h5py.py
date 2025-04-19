@@ -23,7 +23,7 @@ except Exception as e:
 
 def parse_args():
     parser = argparse.ArgumentParser('H5Py Test')
-    parser.add_argument('--h5_file', type=str, default='/cs/student/projects1/rai/2024/jiawyang/coursework2_groupJ/data/ucl_data_fixed.h5', 
+    parser.add_argument('--h5_file', type=str, default='./coursework2_groupJ/data/ucl_data_fixed.h5', 
                         help='Path to h5 file to test')
     parser.add_argument('--detailed', action='store_true', help='Show detailed dataset information')
     parser.add_argument('--num_points', type=int, default=1024, help='Number of points per cloud')
