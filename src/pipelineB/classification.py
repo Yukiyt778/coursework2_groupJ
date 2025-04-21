@@ -212,8 +212,14 @@ def detect_table_region(image):
 
 def detect_table_from_depth(depth_map):
     """Detect table surface using depth information"""
+    # Check if it's a color image and convert to grayscale if needed
+    if len(depth_map.shape) == 3:
+        gray = cv2.cvtColor(depth_map, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = depth_map
+    
     # Normalize depth for visualization
-    depth_normalized = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX)
+    depth_normalized = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
     depth_normalized = np.uint8(depth_normalized)
     
     # Apply morphological operations to clean up the depth map
@@ -222,6 +228,10 @@ def detect_table_from_depth(depth_map):
     
     # Apply threshold to segment potential flat surfaces
     _, thresh = cv2.threshold(opening, 127, 255, cv2.THRESH_BINARY)
+    
+    # Ensure thresh is single-channel before finding contours
+    if len(thresh.shape) > 2:
+        thresh = cv2.cvtColor(thresh, cv2.COLOR_BGR2GRAY)
     
     # Find contours on the binary image
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -244,7 +254,6 @@ def detect_table_from_depth(depth_map):
     
     if table_contour is not None:
         # Use the polygon directly
-        # Flatten the points and separate into x and y coordinates
         points = table_contour.reshape(-1, 2)
         x_coords = points[:, 0].tolist()
         y_coords = points[:, 1].tolist()
@@ -542,7 +551,7 @@ def create_ensemble_classifier(train_features, train_labels):
     # Create pipeline with scaling
     ensemble_pipeline = Pipeline([
         ('scaler', StandardScaler()),
-        ('selector', SelectKBest(f_classif, k=20)),  # Include selector in pipeline
+        ('selector', SelectKBest(f_classif, k=20)), 
         ('ensemble', ensemble)
     ])
     
@@ -614,7 +623,7 @@ def label_ucl_data(trained_model, threshold=0.5):
     
     if os.path.exists(ucl_dir):
         for filename in os.listdir(ucl_dir):
-            if filename.endswith('.png') :
+            if filename.endswith('.png'):
                 full_path = os.path.join(ucl_dir, filename)
                 ucl_paths.append(full_path)
     
@@ -649,21 +658,29 @@ def label_ucl_data(trained_model, threshold=0.5):
             # Generate polygon data based on prediction
             img = cv2.imread(path)
             if label == 1:  # Table detected
-                # Use detect_table_region to get polygon coordinates
+                # Use detect_table_from_depth to get polygon coordinates
                 try:
-                    polygon = detect_table_region(img)
+                    # Using depth-based detection instead of RGB-based detection
+                    polygon = detect_table_from_depth(img)
                     ucl_polygon_lists.append([polygon])
                 except Exception as e:
                     print(f"Error detecting table in {path}: {e}")
-                    # Fallback to default rectangle
-                    h, w = img.shape[:2]
-                    center_x, center_y = w // 2, h // 2
-                    width, height = w // 3, h // 3
-                    default_polygon = [
-                        [center_x - width//2, center_x + width//2, center_x + width//2, center_x - width//2],
-                        [center_y - height//2, center_y - height//2, center_y + height//2, center_y + height//2]
-                    ]
-                    ucl_polygon_lists.append([default_polygon])
+                    # Fallback to detect_table_region if depth-based detection fails
+                    try:
+                        polygon = detect_table_region(img)
+                        ucl_polygon_lists.append([polygon])
+                        print(f"Fallback to RGB detection for {path}")
+                    except:
+                        # Ultimate fallback to default rectangle
+                        h, w = img.shape[:2]
+                        center_x, center_y = w // 2, h // 2
+                        width, height = w // 3, h // 3
+                        default_polygon = [
+                            [center_x - width//2, center_x + width//2, center_x + width//2, center_x - width//2],
+                            [center_y - height//2, center_y - height//2, center_y + height//2, center_y + height//2]
+                        ]
+                        ucl_polygon_lists.append([default_polygon])
+                        print(f"Using default rectangle for {path}")
             else:
                 # No table, empty polygon list
                 ucl_polygon_lists.append([])
